@@ -6,7 +6,7 @@ App::uses('CakeEmail', 'Network/Email');
 CONST LIMIT = 10;
 
 class UsersController extends AppController {
-    
+
     public $components = array('Session', 'Auth', 'RequestHandler', 'Custom');
     public $helpers = array('Html', 'Form', 'Session');
 
@@ -26,20 +26,23 @@ class UsersController extends AppController {
     }
 
     public function admin_dashboard() {
-        $this->User->recursive = 0;
-        $x = $this->User->find('all');
-        $this->set("users", $x);
-        $y = $this->User->find('all', array('conditions' => array('User.username !=' => 'admin')));
-        $this->set("use_count", $y);
-        $users = $this->User->find('all', array('conditions' => array('User.username !=' => 'admin')));
-        $usercount = count($users);
-        $this->set("usercount", $usercount);
-        $limit = $this->User->find('all', array('conditions' => array('User.username !=' => 'admin'), 'order' => array('User.MemberID' => 'ASC'), 'limit' => 6));
-        $this->set(compact('use_count', 'limit'));
+        $MemberID = $this->Session->read('Auth.User.MemberID');
+        $this->loadModel('Project');
+        $this->loadModel('Contract');
+        $users = $this->User->find('all', array('recursive' => false, 'conditions' => array('User.username !=' => 'admin')));
+        $this->set("user_count", count($users));
+
+        $projects = $this->Project->find('all', array('recursive' => false, 'conditions' => array('Project.Deleted' => 0, 'Project.Archived' => 0), 'order' => 'Project.CreatedDate DESC', 'limit' => 6));
+        $this->set("projects", $projects);
+
+        $contracts = $this->Contract->find('count');
+        $this->set("contract_count", $contracts);
+
+        $tasks = $this->Task->find('all', array('conditions' => array('Task.Deleted' => 0), 'order' => 'Task.CreatedDate DESC', 'limit' => 6));
+        $this->set("tasks", $tasks);
     }
 
     public function admin_profile() {
-        $this->loadModel('User');
         $MemberID = $this->Session->read('Auth.User.MemberID');
         if (!empty($this->request->data)) {
             $this->User->save($this->request->data);
@@ -91,9 +94,16 @@ class UsersController extends AppController {
         $this->layout = 'admin/login';
         $this->set('page_title', 'Login');
         if ($this->Session->read('Auth.User')) {
-            $this->redirect(array('controller' => 'dashboard'));
+            if (!empty($this->Session->read('Auth.User.MemberID'))) {
+                if ($this->Session->read('Auth.User.Access_Level') == '1') {
+                    $this->redirect(array('action' => 'dashboard', 'admin' => true));
+                } else if ($this->Session->read('Auth.User.Access_Level') == '4') {
+                    $this->redirect(array('action' => 'dashboard', 'admin' => false));
+                } else {
+                    $this->redirect(array('action' => 'dashboard', 'admin' => false));
+                }
+            }
         }
-
         if ($this->request->is('Post')) {
             App::Import('Utility', 'Validation');
             if (isset($this->data['User']['email']) && Validation::email($this->data['User']['email'])) {
@@ -114,8 +124,7 @@ class UsersController extends AppController {
                 );
                 $x = $this->User->find('first', array('conditions' => array('username' => $this->data['User']['email'], 'Active' => (int) 1, 'verified' => (int) 1)));
             }
-
-            if (!empty($x)) {
+            if (!empty($x) && ($this->Session->read('Auth.User.Access_Level') == '1')) {
                 if (($x['User']['Access_Level'] == '1' || $x['User']['Access_Level'] == '2') && $x['User']['Active'] == '1') {
                     if (!$this->Auth->login()) {
                         $this->Session->setFlash('Invalid email or password.', 'error');
@@ -124,10 +133,25 @@ class UsersController extends AppController {
                         $this->redirect(array('controller' => 'users', 'action' => 'admin_dashboard'));
                     }
                 } else {
-                    $this->Session->setFlash("Not authorities or account is inactive");
+                    $this->Session->setFlash("Not authorities or account is inactive", 'error');
+                }
+            } else if (!empty($x)) {
+                if (($x['User']['Access_Level'] == '1' || $x['User']['Access_Level'] == '2') && $x['User']['Active'] == '1') {
+                    if ($this->Session->read('Auth.User.Access_Level') == '4') {
+                        $this->redirect(array('action' => 'dashboard', 'admin' => false));
+                    } else {
+                        if (!$this->Auth->login()) {
+                            $this->Session->setFlash('Invalid email or password.', 'error');
+                        } else {
+                            $this->Session->write('user_session_data', $x['Permission']);
+                            $this->redirect(array('controller' => 'users', 'action' => 'admin_dashboard'));
+                        }
+                    }
+                } else {
+                    $this->Session->setFlash("Not authorities or account is inactive", 'error');
                 }
             } else {
-                $this->Session->setFlash("User not exist", 'error');
+                $this->Session->setFlash("user does not exist.", 'error');
             }
         }
     }
@@ -272,7 +296,9 @@ class UsersController extends AppController {
         $this->get_authorize('users/list_member');
         $this->get_authorize('users/list_member');
         $this->loadModel('User');
+        $this->loadModel('Membership');
         $this->User->recursive = 0;
+        $membership = $this->Membership->find('all');
         if ($this->request->is('post')) {
             $keyword = trim($this->request->data['query']);
             if (!empty($keyword)) {
@@ -285,6 +311,7 @@ class UsersController extends AppController {
         } else {
             $this->paginate = array('conditions' => array('User.username !=' => 'admin', 'User.Access_Level' => '4'), 'order' => array('User.MemberID' => 'ASC'), 'limit' => 10);
             $this->set('member', $this->paginate());
+            $this->set('membership', $membership);
         }
     }
 
@@ -415,10 +442,16 @@ class UsersController extends AppController {
         $this->layout = 'login';
         $this->set('page_title', 'Login');
         if ($this->Session->read('Auth.User')) {
-            //$this->Session->setFlash('You are already logged in the panel','success');
-            $this->redirect(array('controller' => 'dashboard'));
+            if (!empty($this->Session->read('Auth.User.MemberID'))) {
+                if ($this->Session->read('Auth.User.Access_Level') == '1') {
+                    $this->redirect(array('action' => 'dashboard', 'admin' => true));
+                } else if ($this->Session->read('Auth.User.Access_Level') == '4') {
+                    $this->redirect(array('action' => 'dashboard'));
+                } else {
+                    $this->redirect(array('action' => 'dashboard'));
+                }
+            }
         }
-
         if ($this->request->is('Post')) {
             App::Import('Utility', 'Validation');
             if (isset($this->data['User']['email']) && Validation::email($this->data['User']['email'])) {
@@ -440,14 +473,25 @@ class UsersController extends AppController {
                 $x = $this->User->find('first', array('conditions' => array('username' => $this->data['User']['email'], 'Active' => (int) 1, 'verified' => (int) 1)));
             }
 
-            if (!empty($x)) {//if user exist
-                if (!$this->Auth->login()) {
-                    $this->Session->setFlash('Please check your password.', 'error');
-                    $this->redirect(array('controller' => '/'));
+            if (!empty($x)) {
+                if ($this->Session->read('Auth.User.Access_Level') == '1') {
+                    $this->redirect(array('action' => 'dashboard', 'admin' => true));
+                } else if ($this->Session->read('Auth.User.Access_Level') == '4') {
+                    $this->redirect(array('action' => 'dashboard'));
+                } else if ($x['User']['username'] == 'admin') {
+                    if ($this->Auth->login()) {
+                        $this->Session->write('user_session_data', $x['Permission']);
+                        $this->redirect(array('action' => 'dashboard', 'admin' => true));
+                    }
                 } else {
+                    if (!$this->Auth->login()) {
+                        $this->Session->setFlash('Please check your password.', 'error');
+                        $this->redirect(array('controller' => '/'));
+                    } else {
 
-                    $this->Session->setFlash('Successfully signed in', 'success_message');
-                    return $this->redirect($this->Auth->redirectUrl());
+                        $this->Session->setFlash('Successfully signed in', 'success_message');
+                        return $this->redirect($this->Auth->redirectUrl());
+                    }
                 }
             } else {// if not user exist
                 $this->Session->setFlash("Invalid username / password or your account is not activated yet.", 'error');
@@ -456,7 +500,78 @@ class UsersController extends AppController {
         }
     }
 
-//end of func login//
+    /*
+     * Contact invite through email
+     * By Pankaj
+     * Date: 07.07.2017 
+     */
+
+    public function invite_contact() {
+
+        if ($this->request->is('ajax')) {
+            $status = 201;
+            $html = "";
+            $this->loadModel('Contact');
+            $this->loadModel('ProjectMember');
+            $memberId = $this->Session->read('Auth.User.MemberID');
+            $contactArr = $this->request->data['Contact'];
+            $checkEmailExist = $this->User->find('count', array('conditions' => array('User.Email' => $contactArr['InviteeEmail'])));
+            if ($checkEmailExist == 0) {
+                $checkContactExist = $this->Contact->find('count', array('conditions' => array('Contact.InviteeEmail' => $contactArr['InviteeEmail'], 'Contact.MemberID1' => $memberId)));
+                if ($checkContactExist == 0) {
+                    $contactArr['MemberID1'] = $memberId;
+                    $contactArr['MemberID2'] = 0;
+                    $contactArr['Confirmed'] = 0;
+                    $contactArr['Date'] = date('Y-m-d H:i:s');
+                    if ($this->Contact->save($contactArr)) {
+                        $contact_id = $this->Contact->getLastInsertId();
+
+                        /*                         * ***************** Saving project member for the invitation ************************ */
+                        if (!empty($this->request->data['ProjectID'])) {
+                            foreach ($this->request->data['ProjectID'] as $ProjectID) {
+                                $checkProjectMemberExist = $this->ProjectMember->find('count', array('conditions' => array('ProjectMember.ProjectID' => $ProjectID, 'ProjectMember.ContactID' => $contact_id)));
+                                if ($checkProjectMemberExist == 0) {
+                                    $projectMemberArr['ProjectMember']['AddedDate'] = date('Y-m-d H:i:s');
+                                    $projectMemberArr['ProjectMember']['ProjectID'] = $ProjectID;
+                                    $projectMemberArr['ProjectMember']['MemberID'] = $memberId;
+                                    $projectMemberArr['ProjectMember']['ContactID'] = $contact_id;
+                                    $this->ProjectMember->save($projectMemberArr);
+                                }
+                            }
+                        }
+
+                        /*                         * ***************** Send Email to User************************ */
+                        $InviterName = ucfirst($this->Session->read('Auth.User.FirstName')) . ' ' . ucfirst($this->Session->read('Auth.User.LastName'));
+                        $email_message = '<tr><td class = "container-padding content" align = "left" style = "padding-left:24px;padding-right:24px;padding-top:12px;padding-bottom:12px;background-color:#ffffff"><br>
+                                <h5>Dear ' . ucfirst($contactArr['FirstName']) . '<h5>
+                                <h6>You have been invited by ' . $InviterName . ' to join ProjectEngineer, a web based project management system for engineers.</h6>
+                                <br>
+                                <h5>Click to go to the forum with below link</h5>
+                                <h6><a href="' . Router::url("/", true) . 'forum">' . Router::url("/", true) . 'forum</a></h6>
+                                </td>
+                            </tr >';
+
+                        $Email = new CakeEmail();
+                        $Email->emailFormat('html');
+                        $Email->template('default');
+                        $Email->to($contactArr['InviteeEmail']);
+                        $Email->subject('Find the invitation');
+                        $Email->from('webmaster@projectengineer.net');
+                        $Email->send($email_message);
+                        /*                         * ***************************************** */
+                        $status = 200;
+                        $html = '<p style="color:green;">Invitation sent successfully...</p>';
+                    }
+                } else {
+                    $html = '<p style="color:red;">Contact already exist...</p>';
+                }
+            } else {
+                $html = '<p style="color:red;">Email already exist...</p>';
+            }
+
+            $this->Custom->send($status, $html);
+        }
+    }
 
     public function signup() {//start of function signup
         $this->layout = 'login';
@@ -466,6 +581,7 @@ class UsersController extends AppController {
             //debug($this->data); exit;
             $this->request->data['User']['JoinedDate'] = date('y-m-d h:i:s');
             $this->request->data['User']['SubscriptionType'] = 'Free';
+            $this->request->data['User']['Access_Level'] = 4;
             $this->User->set($this->request->data);
             if ($this->User->save($this->request->data)) {
 
@@ -515,7 +631,9 @@ class UsersController extends AppController {
     }
 
     public function dashboard() {
+        $memberId = $this->Session->read('Auth.User.MemberID');
         $this->loadModel('Document');
+        $this->loadModel('Forum');
         if ($this->request->is('ajax')) {
             $offset = $this->request->data['row'];
             $projectData = $this->Custom->get_project_feeds('all', NULL, 1, LIMIT, $offset);
@@ -524,13 +642,16 @@ class UsersController extends AppController {
         }
         $this->layout = 'login';
         $projectData = $this->Custom->get_project_feeds('all', NULL, 1, LIMIT, 0);
-        $taskData = $this->getProjectTaskList('Task.EndDate', 'Desc');
-       
-        $projectDocument  = $this->Document->find('all', array('conditions' => array('Document.Deleted' => (int) 0, 'Document.Status' => (int) 1), 'order' => array('Document.DocumentID' => 'DESC'), 'limit' => 6));
-        
         $this->set('projectData', $projectData);
+
+        $taskData = $this->getProjectTaskList('Task.EndDate', 'Desc');
         $this->set('taskData', $taskData);
-        $this->set('projectDocument', $projectDocument);
+
+        $forumLists = $this->Forum->find('all', array('recursive' => -1, 'conditions' => array('Forum.type' => 'projects', 'Forum.PostedBy' => $memberId, 'Forum.Archived' => (int) 0, 'Forum.Level' => (int) 0), 'order' => array('Forum.PostedDate' => 'DESC'), 'limit' => 6));
+        $this->set('forumLists', $forumLists);
+
+        $this->set('projectList', $this->get_project_by_login_user('all', ['Documents'], NULL, 3));
+
         $this->set('feedCount', $this->get_count());
     }
 
@@ -565,7 +686,9 @@ class UsersController extends AppController {
                     echo json_encode(array('src' => '', 'res' => 0));
                 }
             } else {
-                echo json_encode(array('src' => '', 'res' => 2));
+                $userData = $this->Session->read('Auth.User');
+                $srcfile = $this->webroot . 'files/member/' . $userData['ProfilePic'];
+                echo json_encode(array('src' => $srcfile, 'res' => 2));
             }
         }
         $this->autoRender = false;
@@ -680,30 +803,82 @@ class UsersController extends AppController {
         return $StateList;
     }
 
-    public function get_users_listing($search_keyword) {
+    public function contact_request() {
+        $this->loadModel('Contact');
+        $MemberID = $this->Session->read('Auth.User.MemberID');
+        $contactData = $this->Contact->query("SELECT Contacts.ContactID, Contacts.MemberID2, Contacts.MemberID2, Members.FirstName, Members.LastName, Members.email, Members.ProfilePic FROM Contacts LEFT JOIN Members ON Contacts.MemberID1 = Members.MemberID WHERE Contacts.MemberID2 =  '$MemberID' AND Contacts.Confirmed =0");
 
-        $keyword = explode(" ", strtolower($search_keyword));
-        $userData = $this->User->find('all', array('contain' => array(), 'conditions' => array('OR' => array('User.FirstName IN' => $keyword, 'User.LastName IN' => $keyword, 'User.email IN' => $keyword, 'User.username IN' => $keyword, 'User.FirstName like' => $search_keyword . "%", 'User.LastName like' => $search_keyword . "%", 'User.email like' => $search_keyword . "%", 'User.username like' => $search_keyword . "%")), 'fields' => array('User.MemberID', 'User.FirstName', 'User.LastName', 'User.email', 'User.username', 'User.Company', 'User.City', 'User.Province', 'User.Country', 'User.Address1')));
-        $this->set('userData', $userData);
-        $this->viewPath = 'Elements';
-        $this->render('get_user_listing');
+        $this->set('contactData', $contactData);
+        $this->viewPath = 'Elements/contract';
+        $this->render('contact_request');
     }
 
-    public function add_contact($ContactID) {
-        $MemberID = $this->Session->read('Auth.User.MemberID');
-        $this->loadModel('Contact');
-        $this->Contact->create();
-        $this->Contact->set('date', date('y-m-d h:i:s'));
-        $this->Contact->set('MemberID1', $MemberID);
-        $this->Contact->set('MemberID2', $ContactID);
-        $this->Contact->set('Confirmed', '0');
-        $this->Contact->save();
+    public function accept_request($contact_id) {
+        if ($this->request->is('ajax')) {
+            $this->loadModel('Contact');
+            $this->Contact->query("UPDATE Contacts set Confirmed = 1 where ContactID = '$contact_id'");
+            $this->Custom->send(200, "Request accepted successfully");
+        }
+    }
 
-        $name = $this->GetMemberName($MemberID);
-        // Send email to person that was added
-        $Subject = Configure::read('EMAILPREFIX') . " You have a new contact request";
+    public function get_users_listing($search_keyword, $project = false) {
+        $MemberID = $this->Session->read('Auth.User.MemberID');
+        $keyword = explode(" ", strtolower($search_keyword));
+        $userData = $this->User->find('all', array('contain' => array(), 'conditions' => array('AND' => array('User.MemberID !=' => $MemberID, 'User.Access_Level' => Configure::read('MEMBER_USER')), 'OR' => array('User.FirstName IN' => $keyword, 'User.LastName IN' => $keyword, 'User.email IN' => $keyword, 'User.username IN' => $keyword, 'User.FirstName like' => $search_keyword . "%", 'User.LastName like' => $search_keyword . "%", 'User.email like' => $search_keyword . "%", 'User.username like' => $search_keyword . "%")), 'fields' => array('User.MemberID', 'User.FirstName', 'User.LastName', 'User.email', 'User.username', 'User.ProfilePic', 'User.Company', 'User.City', 'User.Province', 'User.Country', 'User.Address1')));
+        $this->set('userData', $userData);
+        if ($project) {
+            $this->set('projectid', $project);
+        }
+        $this->viewPath = 'Elements/contract';
+        $this->render('contract_search');
+    }
+
+    public function add_contact($ContactID, $projectids = false) {
+        $MemberID = $this->Session->read('Auth.User.MemberID');
+        $get_member = $this->GetMemberName($ContactID, 'other_detail');
+       
+        if ($projectids) {
+            $this->loadModel('ProjectMember');
+            $mem['ProjectMember']['ProjectID'] = $projectids;
+            $mem['ProjectMember']['MemberID'] = $ContactID;
+            $mem['ProjectMember']['AddedDate'] = date('Y-m-d h:i:s');
+            $this->ProjectMember->create();
+            $this->ProjectMember->save($mem);
+        } else {
+            $this->loadModel('Contact');
+            $this->Contact->create();
+            $this->Contact->set('Date', date('Y-m-d h:i:s'));
+            $this->Contact->set('MemberID1', $MemberID);
+            $this->Contact->set('MemberID2', $ContactID);
+            $this->Contact->set('InviteeEmail', $get_member['email']);
+            $this->Contact->set('FirstName', $get_member['first_name']);
+            $this->Contact->set('LastName', $get_member['last_name']);
+            $this->Contact->set('Confirmed', '0');
+            $this->Contact->save();
+            $name = $this->GetMemberName($MemberID);
+            $Subject = Configure::read('EMAILPREFIX') . " You have a new contact request";
+        }
         echo '1';
         exit();
+    }
+
+    public function admin_add_user_membership() {
+        $this->autoRender = false;
+        $this->loadModel('Subscription');
+        $membershipdata['Subscription']['user_id'] = $_POST['user_id'];
+        $membershipdata['Subscription']['membership_id'] = $_POST['member_id'];
+        $membershipdata['Subscription']['created'] = date('Y-m-d h:i:s');
+        $membershipdata['Subscription']['status'] = 1;
+        $this->Subscription->create();
+        if ($this->Subscription->save($membershipdata)) {
+            $lastid = $this->Subscription->getLastInsertId();
+            $this->Subscription->updateAll(
+                    array('Subscription.status' => "'0'"), array('Subscription.user_id' => $_POST['user_id'], 'Subscription.id !=' => $lastid)
+            );
+            echo "success";
+        } else {
+            echo "error";
+        }
     }
 
 }

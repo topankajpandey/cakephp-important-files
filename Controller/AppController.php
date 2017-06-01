@@ -27,12 +27,173 @@ class AppController extends Controller {
             $this->getMemberList($memberId);
             $this->set('GetContactList', $this->GetContactList($memberId));
             $this->set('AnyUnconfirmedContacts', $this->AnyUnconfirmedContacts($memberId));
+
+            $projects = $this->Custom->get_projects('list', NULL, ['ProjectID', 'Name'], -1);
+            $this->set('login_user_projects', $this->project_dropdown($projects));
         }
 
         if ((isset($this->params['prefix']) && ($this->params['prefix'] == 'admin'))) {
             $this->layout = 'admin';
         }
     }
+
+    public function NextThread($type) {
+        $this->loadModel('Forum');
+        $forumData = $this->Forum->find('first', array(
+            'conditions' => array('Forum.type' => $type),
+            'fields' => array('MAX(Forum.Thread) AS MaxThread')
+                )
+        );
+        return ($forumData[0]['MaxThread'] + 1);
+    }
+
+    public function create_project_feed($project_id, $type, $ResourceID, $ResourceID2, $NewValue, $comment) {
+        $this->loadModel('ProjectFeed');
+        $member_name = $this->Custom->get_member_name($this->Session->read('Auth.User'));
+        $InitiatorID = $this->Session->read('Auth.User.MemberID');
+        $comment_data = $member_name . ' ' . $comment;
+        $projectFeed['Date'] = date('Y-m-d H:i:s');
+        $projectFeed['FeedVersion'] = 2;
+        $projectFeed['ProjectID'] = $project_id;
+        $projectFeed['InitiatorID'] = $InitiatorID;
+        $projectFeed['type'] = $type;
+        $projectFeed['ResourceID'] = $ResourceID;
+        $projectFeed['ResourceID2'] = $ResourceID2;
+        $projectFeed['NewValue'] = $NewValue;
+        $projectFeed['Title'] = $comment_data;
+        $this->ProjectFeed->save($projectFeed);
+    }
+
+    public function project_dropdown($data) {
+        $selected_project_id = "";
+        if ($this->request->is('post') && !empty($this->data['filter_project_id'])) {
+            $selected_project_id = $this->data['filter_project_id'];
+        }
+        $curent_action = $this->webroot . $this->params['controller'] . '/' . $this->request->params['action'];
+        $html = '<form action="' . $curent_action . '" method="post" accept-charset="utf-8">';
+        $html .= '<select name="filter_project_id" class="form-control" onchange="filtered_by_project()">';
+        if (!empty($data)) {
+            $html .= '<option value="">Sort By Project</option>';
+            foreach ($data as $key => $value) {
+                if ($selected_project_id == $key) {
+                    $condition = 'selected="selected"';
+                } else {
+                    $condition = '';
+                }
+                $html .= '<option value="' . $key . '"' . $condition . '>' . $value . '</option>';
+            }
+        } else {
+            $html .= '<option value="">No project available</option>';
+        }
+        $html .= '</select>';
+        $html .= '</form>';
+        return $html;
+    }
+
+    /*
+      Purpose: get the array list of project id based on manager id
+      Author Name: Trigma Solutions
+      Date: 21 dec 2016
+     */
+
+    public function get_project_ID_by_manager_id() {
+        $this->loadModel('ProjectManager');
+        $memberId = $this->Session->read('Auth.User.MemberID');
+        $managerArr = $this->ProjectManager->find('all', [
+            'conditions' => array('ProjectManager.MemberID' => $memberId),
+                ]
+        );
+        $projects = array();
+        if (!empty($managerArr)) {
+            foreach ($managerArr as $manager) {
+                $projects[] = $manager['ProjectManager']['ProjectID'];
+            }
+        }
+        return $projects;
+    }
+
+    /*
+      Purpose: get projetcs type based on defined params
+      Author Name: Trigma Solutions
+      Date: 21 dec 2016
+     */
+
+    public function get_project_by_ids($type = false, $recursive = -1, $ProjectID = NULL) {
+        $this->loadModel('ProjectManager');
+        $project_ids = $this->get_project_ID_by_manager_id();
+        if (!empty($project_ids)) {
+            $conditions = ['Project.ProjectID IN' => $project_ids, 'Project.Archived' => 0, 'Project.Deleted' => 0];
+            if ($ProjectID) {
+                $condition = ['Project.ProjectID' => $ProjectID, 'Project.Deleted' => 0, 'Project.Archived' => 0];
+            }
+            $projectArr = $this->Project->find($type, [
+                'recursive' => $recursive,
+                'conditions' => $conditions,
+                    ]
+            );
+            return $projectArr;
+        }
+        return count($project_ids);
+    }
+
+    /*
+      Purpose: get projetcs based on login user
+      Author Name: Trigma Solutions
+      Date: 21 dec 2016
+     */
+
+    public function get_project_by_login_user($type = false, $contain = [], $ProjectID = NULL, $limit = false) {
+        $this->loadModel('ProjectManager');
+        $project_ids = $this->get_project_ID_by_manager_id();
+        $projectArr = [];
+        if (!empty($project_ids)) {
+            $conditions = ['Project.ProjectID IN' => $project_ids, 'Project.Archived' => 0, 'Project.Deleted' => 0];
+            if ($ProjectID) {
+                $condition = ['Project.ProjectID' => $ProjectID, 'Project.Deleted' => 0, 'Project.Archived' => 0];
+            }
+            $projectArr = $this->Project->find($type, [
+                'contain' => $contain,
+                'conditions' => $conditions,
+                'limit' => $limit,
+                    ]
+            );
+        }
+        return $projectArr;
+    }
+
+    /*
+      Purpose: Return the length of authority according to their plan
+      Author Name: Trigma Solutions
+      Date: 21 dec 2016
+     */
+
+    public function userPlanMembership($check_rule = false) {
+        $memberId = $this->Session->read('Auth.User.MemberID');
+        $check_rule_length = 1;
+        $userdata = $this->User->find('first', [
+            'contain' => array(
+                'Subscription' => array(
+                    'Membership',
+                    'conditions' => ['Subscription.status' => 1],
+                    'fields' => ['user_id', 'membership_id']
+                )
+            ),
+            'conditions' => array('User.MemberId' => $memberId),
+                ]
+        );
+        if (!empty($userdata['Subscription'])) {
+            if (!empty($userdata['Subscription']['Membership'])) {
+                $check_rule_length = $userdata['Subscription']['Membership'][$check_rule];
+            }
+        }
+        return $check_rule_length;
+    }
+
+    /*
+      Purpose: Protect feature and functionality for unauthorize user role
+      Author Name: Trigma Solutions
+      Date: 21 dec 2016
+     */
 
     protected function get_authorize($action_value) {
         $index = $this->Session->read('user_session_data');
@@ -51,7 +212,6 @@ class AppController extends Controller {
         $this->Session->setFlash(__('<strong>Unauthorized! </strong> You dont have permission to access that page...'));
         $this->redirect(array('controller' => 'users', 'action' => 'dashboard', 'admin' => true));
     }
-    
 
     /*
       Function Name: getProjectList
@@ -61,10 +221,11 @@ class AppController extends Controller {
      */
 
     public function getProjectList($memberId) {
-        $PID = $this->Custom->getExistMemberInProject($memberId);
+
+        $PID = $this->get_project_ID_by_manager_id();
+        $projectLists = [];
         if (count($PID) > 0) {
             $projectLists = $this->Project->find('all', array('conditions' => array('Project.ProjectID IN' => $PID, 'Project.Archived' => (int) 0, 'Project.Deleted' => (int) 0), 'fields' => array('Project.ProjectID', 'Project.Name', 'Project.Description'), 'order' => array('Project.ProjectID' => 'desc')));
-
         }
         $this->set('projectLists', $projectLists);
     }
@@ -78,8 +239,8 @@ class AppController extends Controller {
 
     public function getMemberList($memberId) {
         $membersLists = array();
-        $membersLists = $this->Member->find('all', array('conditions' => array('Member.Active' => (int) 1), 'fields' => array('Member.MemberID', 'Member.username')));
-
+        $memberId = $this->Session->read('Auth.User.MemberID');
+        $membersLists = $this->Member->find('all', array('conditions' => array('Member.Access_Level' => (int) 4, 'Member.Active' => (int) 1, 'Member.MemberID !=' => $memberId), 'fields' => array('Member.MemberID', 'Member.username')));
         $this->set('membersLists', $membersLists);
     }
 
@@ -87,7 +248,6 @@ class AppController extends Controller {
     public function AnyUnconfirmedContacts($MemberID) {
         $AnyUnconfirmedContacts = 0;
         $getAllContacts = $this->Contact->find('all', array('conditions' => array('Contact.MemberID2' => $MemberID)));
-
         foreach ($getAllContacts as $contact) {
             if ($contact['Contact']['Confirmed'] == (int) 0) {
                 $AnyUnconfirmedContacts = 1;
@@ -110,6 +270,7 @@ class AppController extends Controller {
         return $Contacts;
     }
 
+    // Get the contact list based on member id
     function GetContactList($MemberID) {
         $ContactIDs = array();
         $ContactIDs = $this->GetContacts($MemberID);
@@ -120,7 +281,7 @@ class AppController extends Controller {
         return $ContactList;
     }
 
-    // Get New messages for user
+    // Get New messages for user based on member id
     public function GetNewMessages($MemberID) {
         $this->loadModel('Message');
         $NewMessages = array();
@@ -128,51 +289,83 @@ class AppController extends Controller {
         return $NewMessages;
     }
 
-    public function ProfilePic($MemberID, $Size) {
+    // Get member name based on member id and aditional parameter
+    public function GetMemberName($MemberID, $format = false) {
+        $userData = $this->User->find('first', array('conditions' => array('User.MemberID' => $MemberID), 'fields' => array('User.FirstName', 'User.LastName', 'User.email')));
+        if ($format) {
+            return [
+                'first_name' => $userData['User']['FirstName'],
+                'last_name' => $userData['User']['LastName'],
+                'email' => $userData['User']['email'],
+            ];
+        } else {
+            return $userData['User']['FirstName'] . " " . $userData['User']['LastName'];
+        }
+    }
 
+    // Get project name based on project id
+    public function GetProjectName($ProjectID) {
+        $projectData = $this->Project->find('first', array('conditions' => array('Project.ProjectID' => $ProjectID), 'fields' => array('Project.Name')));
+        if ($ProjectID == 0)
+            return "None";
+        else
+            return $projectData['Project']['Name'];
+    }
+
+
+    // check the contact list based on contact id
+    public function isContact($ContactID, $project = false) {
+        $MemberID = $this->Session->read('Auth.User.MemberID');
+        $this->loadModel('Contact');
+        $this->loadModel('ProjectMember');
+        $Contact = "no";
+
+        if ($project) {
+            $condition = array('ProjectMember.MemberID' => $ContactID, 'ProjectMember.ProjectID' => $project);
+            $manager1 = $this->ProjectMember->find('first', array('conditions' => $condition));
+            if (!empty($manager1)) {
+                return 1;
+            } else {
+                return 0;
+            }
+        } else {
+            $contactList = $this->Contact->query("SELECT count(*) as totalcount FROM Contacts WHERE (Contacts.MemberID1 = '" . $ContactID . "' AND Contacts.MemberID2 = '" . $MemberID . "') OR (Contacts.MemberID1 = '" . $MemberID . "' AND Contacts.MemberID2 = '" . $ContactID . "')");
+            $contactCount = $contactList[0][0]['totalcount'];
+            if ($contactCount > 0) {
+                return 1;
+            } else {
+                return 0;
+            }
+        }
+    }
+
+    // Get the project task list based on defined params
+    public function getProjectTaskList($order = false, $order_by = false, $id = false) {
+        $this->loadModel('Task');
+        $condition = [];
+        if ($id) {
+            $condition = ['Task.ProjectID' => $id];
+        }
+
+        $taskLists = $this->Task->find('all', ['contain' => [
+                'Project' => [
+                    'ProjectManager' => ['User'],
+                    'fields' => ['Project.Name', 'Project.Description'],
+                ],
+            ],
+            'conditions' => $condition,
+            'fields' => ['Task.ProjectID', 'Task.Name', 'Task.AssignedBy', 'Task.AssignedTo', 'Task.StartDate', 'Task.EndDate'],
+            'order' => [$order => $order_by]
+                ]
+        );
+        return $taskLists;
+    }
+
+    /* I think the above is unneccessary function. Don't waste time on it */
+
+    public function ProfilePic($MemberID, $Size) {
         $picQuery = $this->User->find('first', array('conditions' => array('User.MemberID' => $MemberID), 'fields' => array('User.ProfilePic')));
         return $profilePic = $picQuery['User']['ProfilePic'];
-        /* if ($profilePic == "") {
-          switch ($Size) {
-          case 1: return "0-avatar_150.png";
-          break;
-          case 2: return "0-avatar_39.png";
-          break;
-          case 3: return "0-avatar_150.png";
-          break;
-          case 4: return "0-avatar_75.png";
-          break;
-          }
-          } else {
-          list($width, $height) = getimagesize(Configure::read('SITEURL') . '/files/User/UserProfilePics/000000100.png');
-          if ($height != 0)
-          $AspectRatio = $width / $height;
-          else
-          $AspectRatio = 0;
-          switch ($Size) {
-          case 1: $html = "width='" . $width . "' height='" . $height . "'";
-          break;
-          case 2:
-          if ($AspectRatio > 1.5)
-          $html = "width='39'";   // pic is wide
-          if ($AspectRatio <= 1.5)
-          $html = "height='26'";   // pic is tall
-          break;
-          case 3:
-          if ($AspectRatio > 1.5)
-          $html = "width='150'";   // pic is wide
-          if ($AspectRatio <= 1.5)
-          $html = "height='100'";   // pic is tall
-          break;
-          case 4:
-          if ($AspectRatio > 1.5)
-          $html = "width='75'";   // pic is wide
-          if ($AspectRatio <= 1.5)
-          $html = "height='50'";   // pic is tall
-          break;
-          }
-          return '1-' . $html . '-' . $profilePic;
-          } */
     }
 
     // Returns an encrypted number from a string encrypted by EncryptNum().
@@ -318,54 +511,5 @@ class AppController extends Controller {
         } else
             return 0;
     }
-
-    public function GetMemberName($MemberID) {
-        $userData = $this->User->find('first', array('conditions' => array('User.MemberID' => $MemberID), 'fields' => array('User.FirstName', 'User.LastName')));
-        return $userData['User']['FirstName'] . " " . $userData['User']['LastName'];
-    }
-
-    public function GetProjectName($ProjectID) {
-        $projectData = $this->Project->find('first', array('conditions' => array('Project.ProjectID' => $ProjectID), 'fields' => array('Project.Name')));
-        if ($ProjectID == 0)
-            return "None";
-        else
-            return $projectData['Project']['Name'];
-    }
-
-    public function isContact($ContactID) {
-        $MemberID = $this->Session->read('Auth.User.MemberID');
-        $this->loadModel('Contact');
-        $Contact = "no";
-        $contactList = $this->Contact->query("SELECT count(*) as totalcount FROM Contacts WHERE (Contacts.MemberID1 = '" . $ContactID . "' AND Contacts.MemberID2 = '" . $MemberID . "') OR (Contacts.MemberID1 = '" . $MemberID . "' AND Contacts.MemberID2 = '" . $ContactID . "')");
-
-        $contactCount = $contactList[0][0]['totalcount'];
-        if ($contactCount > 0) {
-            return 1;
-        } else {
-            return 0;
-        }
-    }
-
-    public function getProjectTaskList($order = false, $order_by = false, $id = false) {
-        $condition = [];
-        if ($id) {
-            $condition = ['Task.ProjectID' => $id];
-        }
-        //$taskLists = $this->Task->find('all', array('recursive' => 3, 'conditions' => $condition, 'fields' => array('Task.ProjectID', 'Task.Name', 'Task.AssignedBy', 'Task.AssignedTo', 'Task.StartDate', 'Task.EndDate'), 'order' => array($order => $order_by)));
-        $taskLists = $this->Task->find('all', ['contain' => [
-                'Project' => [
-                    'ProjectManager' => ['User'],
-                    'fields' => ['Project.Name', 'Project.Description'],
-                ],
-            ],
-            'conditions' => $condition,
-            'fields' => ['Task.ProjectID', 'Task.Name', 'Task.AssignedBy', 'Task.AssignedTo', 'Task.StartDate', 'Task.EndDate'],
-            'order' => [$order => $order_by]
-            ]
-        );
-        return $taskLists;
-    }
-    
-    
 
 }

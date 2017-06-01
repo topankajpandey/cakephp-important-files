@@ -45,7 +45,7 @@ class MembershipsController extends AppController {
                 }
             }
         }
-        $this->data = $this->Membership->find('first', array('condtion' => array('Membership.Id')));
+        $this->data = $this->Membership->find('first', array('conditions' => array('Membership.Id' => $id)));
     }
 
     public function admin_delete($id = null) {
@@ -97,6 +97,13 @@ class MembershipsController extends AppController {
         }
         $this->Session->setFlash(__('Please try again later.'));
         $this->redirect(array('action' => 'index', 'admin' => true));
+    }
+    
+    /* Front End method */
+    public function index(){
+        $this->loadModel('Membership');
+        $membership = $this->Membership->find('all', array('conditions' => array('Membership.status' => 1), 'order' => 'Membership.created ASC'));
+        $this->set('membership',$membership);
     }
 
 }

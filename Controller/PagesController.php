@@ -1,41 +1,80 @@
 <?php
-/**
- * Static content controller.
- *
- * This file will render views from views/pages/
- *
- * CakePHP(tm) : Rapid Development Framework (http://cakephp.org)
- * Copyright (c) Cake Software Foundation, Inc. (http://cakefoundation.org)
- *
- * Licensed under The MIT License
- * For full copyright and license information, please see the LICENSE.txt
- * Redistributions of files must retain the above copyright notice.
- *
- * @copyright     Copyright (c) Cake Software Foundation, Inc. (http://cakefoundation.org)
- * @link          http://cakephp.org CakePHP(tm) Project
- * @package       app.Controller
- * @since         CakePHP(tm) v 0.2.9
- * @license       http://www.opensource.org/licenses/mit-license.php MIT License
- */
-
+ob_start();
 App::uses('AppController', 'Controller');
 
-/**
- * Static content controller
- *
- * Override this controller by placing a copy in controllers directory of an application
- *
- * @package       app.Controller
- * @link http://book.cakephp.org/2.0/en/controllers/pages-controller.html
- */
 class PagesController extends AppController {
 
-	public $uses = array();
-    public $components = array('Session', 'Auth', 'RequestHandler', 'Custom');
+    public $components = array('Session', 'Auth', 'RequestHandler');
     public $helpers = array('Html', 'Form', 'Session');
     
-    public function admin_index(){
-        
+    public function beforeFilter() {
+        parent::beforeFilter();
+        $this->Auth->allow(array('membership'));
+    }
+    
+    /* Admin End defined method */
+    public function admin_index() {
+        //$this->loadModel('Page');
+        //$this->get_authorize('pages/index');
+        $pageArr = $this->Page->find('all');
+        $this->set('pages', $pageArr);
+    }
+
+    public function admin_add() {
+        $this->loadModel('Page');
+        $this->get_authorize('pages/add');
+        if (!empty($this->request->data)) {
+            $this->Page->set($this->data);
+            if ($this->Page->validates()) {
+                if ($this->Page->save($this->request->data)) {
+                    $this->Session->setFlash(__('Page created successfully...'));
+                    $this->redirect(array('action' => 'index', 'admin' => true));
+                } else {
+                    $this->Session->setFlash(__('Please try again later.'));
+                }
+            }
+        }
+    }
+
+    public function admin_edit($id=null) {
+        $this->get_authorize('pages/edit');
+        $this->loadModel('Page');
+        if (!empty($this->request->data)) {
+            $this->Page->set($this->data);
+            if ($this->Page->validates()) {
+                if ($this->Page->save($this->request->data)) {
+                    $this->Session->setFlash(__('Page updated successfully...'));
+                    $this->redirect(array('controller' => 'pages', 'action' => 'admin_index'));
+                } else {
+                    $this->Session->setFlash(__('Please try again later.'));
+                }
+            }
+        }
+        $this->data = $this->Page->find('first', array('conditions' => array('Page.id' => $id)));
+    }
+    
+    public function admin_delete($id = null) {
+        $this->get_authorize('pages/delete');
+        $this->loadModel('Page');
+        $this->Page->id = $id;
+        if (!$this->Page->exists()) {
+            throw new NotFoundException(__('Invalid Membership'));
+        }
+        if ($this->Page->delete($id, true)) {
+            $this->Session->setFlash(__('Page deleted successfully...'));
+            $this->redirect(array('action' => 'index', 'admin' => true));
+        }
+        $this->Session->setFlash(__('Page are not deleted. Please try again.'));
+        $this->redirect(array('action' => 'index', 'admin' => true));
+    }
+
+    /* Front End defined method */
+    public function about() {}
+    
+    public function index($slug) {
+        $this->loadModel('Page');
+        $page_data = $this->Page->find('first', array('conditions' => array('Page.slug' => $slug), 'fields' => array('title','description','created')));
+        $this->set('page_data',$page_data);
     }
     
 }

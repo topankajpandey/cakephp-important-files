@@ -2,10 +2,13 @@
 
 App::uses('Component', 'Controller');
 App::import("Model", "Project");
+App::import("Model", "Contract");
 App::import("Model", "Folder");
+App::import("Model", "Gallery");
 App::import("Model", "Document");
 App::import("Model", "ProjectFeed");
 App::import("Model", "User");
+App::import("Model", "ProjectManager");
 App::import("Model", "ProjectMember");
 
 class CustomComponent extends Component {
@@ -14,32 +17,54 @@ class CustomComponent extends Component {
 
     public function get_members($type, $condition = [], $field = [], $recursive = NULL, $limit = NULL, $offset = NULL) {
         $model = new User();
+       
         $members = $model->find($type, array('recursive' => $recursive, 'conditions' => $condition, 'fields' => $field, 'order' => 'User.MemberID DESC', 'limit' => $limit, 'offset' => $offset));
         return $members;
     }
 
-    public function getExistMemberInProject($memberId) {
-        $model = new ProjectMember();
-        $userData = $model->find('all', array('conditions' => array('ProjectMember.MemberID' => $memberId), 'fields' => array('ProjectMember.ProjectID')));
-        $PID = array();
-        $projectLists = array();
-        foreach ($userData as $pmembers) {
-            $PID[] = $pmembers['ProjectMember']['ProjectID'];
+    public function getExistMemberInProject($memberId=false) {
+        $model = new ProjectManager();
+        $memberId = $this->Session->read('Auth.User.MemberID');
+        $managerArr = $model->find('all', [
+            'conditions' => array('ProjectManager.MemberID' => $memberId),
+                ]
+        );
+        $projects = array();
+        if (!empty($managerArr)) {
+            foreach ($managerArr as $manager) {
+                $projects[] = $manager['ProjectManager']['ProjectID'];
+            }
         }
-        return $PID;
+        return $projects;
     }
-
+    
     public function get_projects($type, $ProjectID = NULL, $field = [], $recursive = NULL, $limit = NULL) {
         $model = new Project();
         $memberId = $this->Session->read('Auth.User.MemberID');
-        $PID = $this->getExistMemberInProject($memberId);
-        $condition = ['Project.Deleted' => 0, 'Project.Archived' => 0, 'Project.ProjectID IN' => $PID];
+        $PID = $this->getExistMemberInProject();
+        $condition = $project = [];
+        
+        if(!empty($PID)){
+            $condition = ['Project.Deleted' => 0, 'Project.Archived' => 0, 'Project.ProjectID IN' => $PID];
+            $project = $model->find($type, array('recursive' => $recursive, 'conditions' => $condition, 'fields' => $field, 'order' => 'Project.ProjectID DESC', 'limit' => $limit));
+        }
+        
         if ($ProjectID) {
-            $condition = ['Project.ProjectID IN' => $PID, 'Project.ProjectID' => $ProjectID, 'Project.Deleted' => 0, 'Project.Archived' => 0];
+            $condition = ['Project.ProjectID' => $ProjectID, 'Project.Deleted' => 0, 'Project.Archived' => 0];
+            $project = $model->find($type, array('recursive' => $recursive, 'conditions' => $condition, 'fields' => $field, 'order' => 'Project.ProjectID DESC', 'limit' => $limit));
+        } 
+        return $project;
+    }
+    
+    public function get_contracts($type, $ContractID = NULL, $field = [], $recursive = NULL, $limit = NULL) {
+        $model = new Contract();
+        $condition = ['Contract.status' => 1];
+        if ($ContractID) {
+            $condition = ['Contract.id' => $ContractID];
         }
 
-        $project = $model->find($type, array('recursive' => $recursive, 'conditions' => $condition, 'fields' => $field, 'limit' => $limit));
-        return $project;
+        $contract = $model->find($type, array('recursive' => $recursive, 'conditions' => $condition, 'fields' => $field, 'limit' => $limit));
+        return $contract;
     }
 
     public function get_project_feeds($type, $ProjectID = NULL, $recursive = NULL, $limit = NULL, $offset = NULL) {
@@ -66,13 +91,19 @@ class CustomComponent extends Component {
 
     public function get_folders_by_project($type, $field = [], $FolderID = NULL, $recursive = NULL) {
         $model = new Folder();
-        $folders = $model->find($type, array('recursive' => $recursive, 'conditions' => array('Folder.ProjectID' => $FolderID), 'fields' => $field));
+        $folders = $model->find($type, array('recursive' => $recursive, 'conditions' => array('Folder.ProjectID' => $FolderID, 'Folder.Deleted' => 0), 'fields' => $field));
         return $folders;
     }
 
     public function get_folders_by_id($type, $field = [], $FolderID = NULL, $recursive = NULL) {
         $model = new Folder();
         $folders = $model->find($type, array('recursive' => $recursive, 'conditions' => array('FolderID' => $FolderID), 'fields' => $field));
+        return $folders;
+    }
+    
+    public function get_galleries_by_id($type, $field = [], $galleryID = NULL, $recursive = NULL) {
+        $model = new Gallery();
+        $folders = $model->find($type, array('recursive' => $recursive, 'conditions' => array('GalleryID' => $galleryID), 'fields' => $field));
         return $folders;
     }
 
@@ -141,7 +172,6 @@ class CustomComponent extends Component {
 
     public function checkSessionProject($project_id, $condition=[]) {
         if (!empty($this->Session->read('Userdefined'))) {
-            $session_project_id = $this->Session->read('Userdefined.project_id');
             return $conditions = array('Project.ProjectID' => $project_id);
         }
         return $condition;

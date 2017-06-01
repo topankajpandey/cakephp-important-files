@@ -14,11 +14,11 @@ class ProjectsController extends AppController {
     public function beforeFilter() {
 
         parent::beforeFilter();
-        $this->Auth->allow(array('login', 'signup', 'forgot', 'reset', 'verification'));
+        $this->Auth->allow(array('login', 'signup', 'forgot', 'reset', 'verification', 'admin_checkmanagerexist'));
     }
 
-   
     /* ADMIN FUNCTIONS STARTS */
+
     public function admin_list_project() {
         $this->get_authorize('projects/list_project');
         $this->loadModel('Project');
@@ -26,14 +26,14 @@ class ProjectsController extends AppController {
         if ($this->request->is('post')) {
             $keyword = trim($this->request->data['query']);
             if (!empty($keyword)) {
-                @$records = $this->Project->find('all', array('conditions' => array("Project.Name LIKE" => "%$keyword%")));
+                @$records = $this->Project->find('all', array('conditions' => array('Project.Name LIKE' => '%$keyword%', 'Project.Deleted' => 0, 'Project.Archived' => 0)));
             }
             $this->set("project", @$records, $this->paginate());
             if (count(@$records) == 0) {
                 $this->Session->setFlash("No Record found");
             }
         } else {
-            $this->paginate = array('order' => array('Project.ProjectID' => 'ASC'), 'limit' => 20);
+            $this->paginate = array('conditions' => array('Project.Deleted' => 0, 'Project.Archived' => 0), 'order' => array('Project.ProjectID' => 'ASC'), 'limit' => 20);
             $this->set('project', $this->paginate());
         }
     }
@@ -60,14 +60,16 @@ class ProjectsController extends AppController {
         $this->loadModel('Project');
         $this->loadModel('Task');
         $memberId = $this->Session->read('Auth.User.MemberID');
-        $this->Project->contain(array('ProjectMember' => array('User'), 'ProjectManager' => array('User'), 'ProjectFeed' => array('User')));
+        $this->Project->contain(array('ProjectMember' => array('User'), 'ProjectManager' => array('User'), 'Forum', 'Documents', 'ProjectFeed' => array('User')));
         $projectData = $this->Custom->get_projects('first', $ProjectID, ['ProjectID', 'Name', 'Description', 'Archived', 'completed', 'Deleted']);
         $taskLists = $this->Schedule->find('all', array('conditions' => array('Schedule.ProjectID' => $ProjectID), 'fields' => array('Schedule.ProjectID', 'Schedule.TaskID', 'Schedule.Name', 'Schedule.StartDate', 'Schedule.EndDate')));
         $projecttimeduration = $this->Project->find('all', array('conditions' => array('Project.ProjectID' => $ProjectID), 'fields' => array('Project.CreatedDate', 'Project.ChangedDate')));
 
         $memberIDS = array();
-        foreach ($projectData['ProjectManager'] as $proManager) {
-            $memberIDS[] = $proManager['MemberID'];
+        if (!empty($projectData)) {
+            foreach ($projectData['ProjectManager'] as $proManager) {
+                $memberIDS[] = $proManager['MemberID'];
+            }
         }
         $this->set('projectData', $projectData);
         $this->set('memberIDS', $memberIDS);
@@ -91,12 +93,12 @@ class ProjectsController extends AppController {
     /* ADMIN FUNCTIONS ENDS */
 
     public function new_project() {
+
         if ($this->request->is('Post')) {
-            $memberId = $this->Session->read('Auth.User.MemberID');
             $memberName = $this->Session->read('Auth.User.FirstName') . ' ' . $this->Session->read('Auth.User.LastName');
             $this->request->data['Project']['CreatedDate'] = date('y-m-d h:i:s');
             $this->request->data['Project']['ChangedDate'] = date('y-m-d h:i:s');
-            //$this->request->data['User']['MemberID'] = $memberId;
+            $memberId = $this->Session->read('Auth.User.MemberID');
             $this->Project->set($this->request->data);
             if ($this->Project->save($this->request->data)) {
                 $NewProjectID = $this->Project->getLastInsertId();
@@ -108,14 +110,6 @@ class ProjectsController extends AppController {
                 $this->ProjectManager->set('ProjectID', $NewProjectID);
                 $this->ProjectManager->set('MemberID', $memberId);
                 $this->ProjectManager->save();
-
-                // Enter current user as project participant
-                $this->loadModel('ProjectMember');
-                $this->ProjectMember->create();
-                $this->ProjectMember->set('AddedDate', date('y-m-d h:i:s'));
-                $this->ProjectMember->set('ProjectID', $NewProjectID);
-                $this->ProjectMember->set('MemberID', $memberId);
-                $this->ProjectMember->save();
 
                 // Create the preferences for this project and user.  Use the db default values.
                 $this->loadModel('SettingsUser');
@@ -156,15 +150,18 @@ class ProjectsController extends AppController {
                 if ($this->data["prefix"] == 'admin') {
                     $this->redirect(array('action' => 'list_project', 'admin' => true));
                 } else {
-                    $this->redirect(array('controller' => 'dashboard'));
+                    $this->redirect(array('controller' => 'documents', 'action' => 'index'));
                 }
             } else {
                 $this->Session->setFlash("Please correct the following errors", 'error_message');
             }
         }
+        $this->set('total_project_length_now', $this->get_project_by_ids('count'));
+        $this->set('subscription_project_length', $this->userPlanMembership('total_project_length'));
     }
 
     public function pm_home($ProjectID) {
+        
         $memberId = $this->Session->read('Auth.User.MemberID');
         $this->Project->contain(array('ProjectMember' => array('User'), 'ProjectManager' => array('User'), 'ProjectFeed' => array('User')));
         //$projectData = $this->Project->find('first', array('conditions' => array('Project.ProjectID' => $ProjectID)));
@@ -370,6 +367,125 @@ class ProjectsController extends AppController {
 
     public function new_contact() {
         
+    }
+
+    public function project_list() {
+        $this->set('refine_project_sidebar', true);
+        $userDetail = $this->Session->read('Auth.User');
+        $userID = $userDetail['MemberID'];
+        $project_ids = $this->get_project_ID_by_manager_id();
+        $this->loadModel('Project');
+        $conditions = $projectlist = [];
+        if ($this->request->is('post') && !empty($this->data['filter_project_id'])) {
+            $this->set('set_project', $this->data['filter_project_id']);
+            $conditions = array('Project.ProjectID' => $this->data['filter_project_id']);
+        } else {
+            $conditions = array('Project.ProjectID IN' => $project_ids, 'Project.Archived' => (int) 0, 'Project.Deleted' => (int) 0);
+        }
+        
+        if (!empty($project_ids)) {
+            $projectlist = $this->Project->find('all', array('recursive' => 0, 'conditions' => $conditions, 'fields' => array('Project.ProjectID', 'Project.Name', 'Project.Description', 'Project.CreatedDate'), 'order' => array('Project.ProjectID' => 'desc')));
+        }
+        $this->set('contractLists', $projectlist);
+    }
+
+    public function admin_checkmanagerexist() {
+        $this->autoRender = false;
+        $this->loadModel('Member');
+        $findUserName = $_GET['manager'];
+        //$getUser = $this->Member->find('first',array('conditions'=>array('Member.username LIKE'=>"%$findUserName")));
+        $getUser = $this->Member->find('all', array('conditions' => array('OR' => array('Member.username' => $findUserName, 'Member.FirstName' => $findUserName, 'Member.LastName' => $findUserName))));
+        if (empty($getUser)) {
+            echo "false";
+        } else {
+            echo "true";
+        }
+    }
+
+    public function admin_add_manager() {
+        $this->autoRender = false;
+        $this->loadModel('ProjectManager');
+		$this->loadModel('ProjectMember');
+        if (!empty($this->request->data)) {
+            $data['ProjectManager']['MemberID'] = $this->request->data['member_id'];
+            $data['ProjectManager']['ProjectID'] = $this->request->data['project'];
+            $data['ProjectManager']['AddedDate'] = date('Y-m-d h:i:s');
+            $this->ProjectManager->create();
+			$this->ProjectMember->query("delete from ProjectMembers where MemberID='".$this->request->data['member_id']."' and ProjectID='".$this->request->data['project']."'");
+            if ($this->ProjectManager->save($data)) {
+                echo "success";
+            } else {
+                echo "error";
+            }
+        }
+    }
+
+    public function admin_get_users_listing() {
+        $this->autoRender = false;
+        $this->loadModel('ProjectManager');
+		$username = $_POST['username'];
+        $getmember = $this->Member->find('first', array('conditions' => array('OR' => array('Member.username LIKE' => "%$username%", 'Member.FirstName LIKE' => "%$username%", 'Member.LastName LIKE' => "%$username%"))));
+        $record = '';
+        if (!empty($getmember)) {
+            foreach ($getmember as $get) {
+                $manager = $this->ProjectManager->find('first', array('conditions' => array('ProjectManager.MemberID' => $get['MemberID'],'ProjectManager.ProjectID' =>$_POST['project'])));
+              //  echo "<pre>";print_r($manager);exit;
+                if (!empty($manager)) {
+                    $status = "<a href='javascript:;' title='Already in contact' class='fa fa-check-circle'></a>";
+                } else {
+                    $status = "<a rel=" . $get['MemberID'] . " class='glyphicon glyphicon-plus-sign add_memberdata' ></a>";
+                }
+                $record .= '<div id="tabs-contract-files" class="forum-table">
+																				<table class="contract_invation"><thead id="tblHead"></thead><tbody><tr><td><img src="/projectengineer//files/member/' . $get['ProfilePic'] . '" width="40"></td><td>' . $get['username'] . '</td><td>' . $get['email'] . '</td><td>' . $get['Address1'] . '</td><td><span id="165-a">' . $status . '</span></td></tr></tbody></table></div>';
+                echo $record;
+            }
+        } else {
+            $error = '<div id="tabs-contract-files" class="forum-table"><table class="contract_invation"><thead id="tblHead"></thead><tbody><tr><td>No record found</td></tr></tbody></table></div>';
+            echo $error;
+        }
+    }
+	
+	public function admin_get_member_listing() {
+        $this->autoRender = false;
+        $this->loadModel('ProjectMember');
+		$username = $_POST['username'];
+        $getmember1 = $this->Member->find('first', array('conditions' => array('OR' => array('Member.username LIKE' => "%$username%", 'Member.FirstName LIKE' => "%$username%", 'Member.LastName LIKE' => "%$username%"))));
+        $record1 = '';
+        if (!empty($getmember1)) {
+            foreach ($getmember1 as $get1) {
+                $manager1 = $this->ProjectMember->find('first', array('conditions' => array('ProjectMember.MemberID' => $get1['MemberID'],'ProjectMember.ProjectID' => $_POST['project'])));
+                //echo "<pre>";print_r($manager1);exit;
+                if (!empty($manager1)) {
+                    $status1 = "<a href='javascript:;' title='Already in contact' class='fa fa-check-circle'></a>";
+                } else {
+                    $status1 = "<a rel=" . $get1['MemberID'] . " class='glyphicon glyphicon-plus-sign add_memberdatastatus' ></a>";
+                }
+                $record1 .= '<div id="tabs-contract-files" class="forum-table">
+																				<table class="contract_invation"><thead id="tblHead"></thead><tbody><tr><td><img src="/projectengineer//files/member/' . $get1['ProfilePic'] . '" width="40"></td><td>' . $get1['username'] . '</td><td>' . $get1['email'] . '</td><td>' . $get1['Address1'] . '</td><td><span id="165-a">' . $status1 . '</span></td></tr></tbody></table></div>';
+                echo $record1;
+            }
+        } else {
+            $error = '<div id="tabs-contract-files" class="forum-table"><table class="contract_invation"><thead id="tblHead"></thead><tbody><tr><td>No record found</td></tr></tbody></table></div>';
+            echo $error;
+        }
+    }
+	
+	public function admin_add_member(){
+	$this->autoRender = false;
+        $this->loadModel('ProjectMember');
+		 $this->loadModel('ProjectManager');
+        if (!empty($this->request->data)) {
+            $data1['ProjectMember']['MemberID'] = $this->request->data['member_id'];
+            $data1['ProjectMember']['ProjectID'] = $this->request->data['project'];
+            $data1['ProjectMember']['AddedDate'] = date('Y-m-d h:i:s');
+            $this->ProjectMember->create();
+			$this->ProjectManager->query("delete from ProjectManagers where MemberID='".$this->request->data['member_id']."' and ProjectID='".$this->request->data['project']."'");
+            if ($this->ProjectMember->save($data1)) {
+                echo "success";
+            } else {
+                echo "error";
+            }
+        }
     }
 
 }
